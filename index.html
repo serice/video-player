@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>EBS player</title>
+    <script>
+        var originDomain = window.document.domain;
+        if(window.document.domain != 'localhost'){
+            window.document.domain = 'ebsoc.co.kr';
+        }
+    </script>
+    <link rel="shortcut icon" href="./assets/image/favicon.ico" type="image/x-icon">
+    <!-- style -->
+    <link href="./assets/css/lx-player-new.css" rel="stylesheet" type="text/css">
+    <style>
+        html,body,.container,.lx-player-dimensions{
+            height:100% !important;
+        }
+    </style>
+
+</head>
+<body>
+<div oncontextmenu='return false' class="container">
+<video id="lx-player" class="video-js bubble"
+controls
+preload="auto"
+playsinline
+data-setup='{ "controlBar": {"pictureInPictureToggle": false} }'>
+<!-- 동영상 자막 지원 -->
+<!--
+<track kind="captions" src="/assets/track/sample.vtt" srclang="en" label="English" default> 
+-->
+<p class="vjs-no-js">
+<div class="tui"></div>
+</video>
+</div>
+
+<script src="./assets/js/lx-player-ebs.js?v=20210429"></script>
+<script src="./assets/js/axios.min.js"></script>
+<script src="./assets/js/crypto-js.min.js"></script>
+<script>
+    
+    
+    document.addEventListener('keydown', function(e) {
+        if(e.keyCode == 123 || e.keyCode == 93) {
+            e.preventDefault();
+            e.returnValue = false;
+        }
+    })
+    document.addEventListener('keyup', function(e) {
+        if(e.keyCode == 123 || e.keyCode == 93) {
+            e.preventDefault();
+            e.returnValue = false;
+        }
+    })
+    document.addEventListener('keypress', function(e) {
+        if(e.keyCode == 123 || e.keyCode == 93) {
+            e.preventDefault();
+            e.returnValue = false;
+        }
+    })
+
+    function getCookie(cookieName){
+        var cookieValue=null;
+        if(document.cookie){
+    	  var array=document.cookie.split((escape(cookieName)+'='));
+    	  if(array.length >= 2){
+    	    var arraySub=array[1].split(';');
+    	    cookieValue=unescape(arraySub[0]);
+    	  }
+        }
+        return cookieValue;
+    }
+
+    function makeRate() {
+        //var lxPlayer = window.videojs('lx-player');
+        var currentTime = lxPlayer.currentTime();
+        var duration = lxPlayer.duration();
+        var rate = parseInt(( currentTime / duration ) * 100);
+	    if(rate > 66) {
+	        rate = 100;
+        }
+        rate = (rate > 100) ? 100 : rate;
+        // console.log(currentTime, duration, rate);
+        return rate;
+    }
+
+    function calcStartAt(rate, duration) {
+        return parseInt(rate * duration / 100, 10);
+    }
+
+    function getQueries() {
+      var queries = {};
+      var query = location.search.slice(1).split('&');
+
+      for(var i=0; i<query.length; i++) {
+        var pair = query[i].split('=');
+        queries[pair[0]] = decodeURIComponent(pair[1]);
+      }
+    
+      return queries;
+    }
+
+    var encrypt = function (memberSeq, lctreLrnSqno, progressRate) {
+        // var data = `${memberSeq}|${lctreLrnSqno}|${progressRate}`;
+        var data = memberSeq + '|' + lctreLrnSqno + '|' + progressRate; 
+        var key  = CryptoJS.enc.Latin1.parse('l40jsfljasln32uf');
+        var iv   = CryptoJS.enc.Latin1.parse('asjfknal3bafjl23');
+
+        var encrypted = CryptoJS.AES.encrypt(
+          data,
+          key,
+          {iv:iv,mode:CryptoJS.mode.CBC,padding:CryptoJS.pad.ZeroPadding
+        });
+        //console.log('encrypted: ' + encrypted) ;
+        var decrypted = CryptoJS.AES.decrypt(encrypted,key,{iv:iv,padding:CryptoJS.pad.ZeroPadding});
+        //console.log('decrypted: '+decrypted.toString(CryptoJS.enc.Utf8));
+
+        return encrypted.toString();
+        // return decrypted;
+    }
+
+    var access = getCookie('access');
+    var memberSeq = getCookie('memberSeq');
+    var host = getCookie('host');
+    var memberSchoolCode = getCookie('memberSchoolCode');
+    var lctreLrnSqno = getParam('lctreLrnSqno');
+    var userId = getParam('userId') || 'unknown';
+    // var vod_url = ( access && memberSeq && lctreLrnSqno && host ) ? getParam('content-url') : null;
+    // var vod_url = ( access && memberSeq && host ) ? getParam('content-url') : null;
+    var vod_url = getParam('content-url');
+    var running_time = getParam('running-time');
+    var progress_rate = Number(getParam('progress-rate') || 0);
+    var course_completion = progress_rate < 100 ? false : true;
+    var start_at = course_completion ? 0 : calcStartAt(progress_rate, Number(running_time));
+    var isPreview = getParam('is-preview');
+    var title = getParam('title') || 'unknown';
+
+    var API_SERVER_COMMON_DOMAIN = '';
+
+    if( originDomain.indexOf('stg') >= 0 ) {
+        API_SERVER_COMMON_DOMAIN = 'http://' + host + '.stg.ebsoc.co.kr/';
+    } else if (originDomain.indexOf('dev') >= 0) {
+        // console.log('dev 테스트')
+        API_SERVER_COMMON_DOMAIN = 'https://' + host + '.dev.ebsoc.co.kr/';
+    } else {
+        API_SERVER_COMMON_DOMAIN = 'https://' + host + '.ebsoc.co.kr/';
+    }
+
+    function callApi(rate) {
+      if( course_completion ) {
+          return;
+      }
+
+      if( !isPreview && lctreLrnSqno ) {
+        encriptedProgressRate = encrypt(memberSeq, lctreLrnSqno, rate);
+        var url = API_SERVER_COMMON_DOMAIN + 'lecture/api/v1/student/learning/' + lctreLrnSqno + '/' + memberSchoolCode + '/progress';
+
+        var axiosConfig = {
+            headers: {
+              'Content-Type': 'application/json;charset=UTF-8',
+              "Access-Control-Allow-Origin": "*",
+              "X-AUTH-TOKEN" : access
+            },
+            proxyHeaders: false,
+            credentials: false
+        };
+
+        //var authToken = {"X-AUTH-TOKEN" : access};
+
+        //axiosConfig.headers = {...axiosConfig.headers, ...authToken};
+        axios.post(url, { encriptedProgressRate:encriptedProgressRate }, axiosConfig).then(function(){
+            if(rate === 100) {
+                course_completion = true;
+                // console.log('done');
+            }
+        }).catch(function(e){
+            // console.log(e);
+        });
+      }
+    }
+
+    // 학습 완료 call_back function
+    var complete_callback = function() {
+        // var lxPlayer = window.videojs('lx-player');
+        // 최종 학습 현재 시간
+        // var current_time = lxPlayer.currentTime();
+        callApi(100);
+        // console.log('iframe1 학습 완료 콜백 함수');
+    }
+
+    // 주기적 발생 call_back function
+    var interval_callback = function() {
+        //  var lxPlayer = window.videojs('lx-player');
+        //  var current_time = lxPlayer.currentTime();
+        //  var duration = lxPlayer.duration();
+        var rate = makeRate();
+        callApi(rate);
+        // console.log('iframe1 콘탠츠 연속성 콜백 함수', rate);
+    }
+
+    var pause_callback = function() {
+        // 동영상 전체 시간
+        // var duration = lxPlayer.duration();
+        // 현재 플레이 시간 추출 함수
+        // var current_time = lxPlayer.currentTime();
+
+        // 수강 시간 구하는 예제
+        // DB에 저장된 최종 학습 시간 - current_time = 수강시간
+        // var lxPlayer = window.videojs('lx-player');
+        var rate = makeRate();
+        callApi(rate);
+        // console.log('iframe1 정지 콜백 함수');
+    }
+
+    var book_marked_callback = function (marker_list) {
+        // console.log('1frame1 : '+marker_list);
+    }
+
+    var queries = getQueries();
+
+    var obj =
+        {
+            // 필수 파라미터
+            // xapi 송출 url
+            //lrsUrl: course_completion ? '' : 'https://lds.ebsoc.co.kr/xAPI/',
+            //lrsUrl: 'https://lds.ebsoc.co.kr/xAPI/',
+            //lrsUrl: queries['lrsUrl'],
+
+            // api에 수집되는 email 정보
+            // email: userId + '@ebsoc.ck.kr', // 사용하지 않으므로 삭제
+
+            homePage: queries['homepage'],
+
+            // 로그인 user id
+            name: queries['name'],
+
+            // 콘텐츠 출처 url
+            baseurl: queries['baseurl'],
+
+            state_id: queries['state_id'],
+
+            // 동영상 콘텐츠 제목
+            content_name: queries['title'],
+
+            // 동영상 콘텐츠 설명
+            description: queries['description'],
+
+            // 동영상 콘텐츠 url
+            // url: 'http://clips.vorwaerts-gmbh.de/VfE_html5.mp4',
+            url: queries['content-url'],
+
+            // 선택 파라미터 - 아래의 옵션은 입력하지 않는다면, 노출되지 않는 옵션
+            // 최초 동영상 콘텐츠 시작 시간. 초단위
+            time: start_at,
+
+            // 워터마크 이미지 경로 - 사용하지 않겠다면 삭제
+            watermark: '',
+
+            // 앞으로 감기 사용 여부
+            forward_btn: course_completion,
+            //forward_btn: false,
+
+            // 뒤 감기 사용 여부
+            //rewind_btn: course_completion,
+            rewind_btn: true,
+
+            // 반복 재생 사용 여부
+            loop_btn: (course_completion ? true : false),
+
+            // 컨트롤바 제어 가능 여부 - 만약 컨트롤바 클릭 비활성화시, 북마크도 제외해야함
+            control_bar: course_completion,
+
+            // 재생 속도 목록,  따로 설정하지 않을 시에는 기본값 적용 [0.5, 0.75, 1, 1.25, 1.5]
+            playback_rates: (course_completion ? [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] : [0.5, 0.75, 1, 1.25, 1.5]),
+
+            // 서버에 저장된 bookmark list를 array로 구현하여 삽입해주어야 함
+            // bookmarks: [],                                  // 서버에 저장된 index list를 array로 구현하여 삽입해함 주아야
+            // index_array : [],                                  // 서버에 저장된 index list를 array로 구현하여 삽입해함 주아야
+            interval_sec : 30,                                 // 콘텐츠 연속성 반복 주기 (초단위)
+            interval_callback : interval_callback,             // 콘텐츠 연속성 콜백 함수
+            complete_callback : complete_callback,             // 학습 완료 콜백 함수
+            pause_callback : pause_callback,                   // 학습 중지시 발생되는 함수
+            book_marked_callback : book_marked_callback        // 북마크 리스트 반환 콜백 함수
+        };
+
+        // url 에서 parameter 추출
+        function getParam(sname) {
+            var params = location.search.substr(location.search.indexOf("?") + 1);
+            var sval = "";
+
+            params = params.split("&");
+
+            for (var i = 0; i < params.length; i++) {
+                temp = params[i].split("=");
+                if ([temp[0]] == sname) { sval = temp[1]; }
+            }
+            if( sval ) {
+                return decodeURIComponent(sval);
+            } else {
+                return sval;
+            }
+        }
+    // player init
+    player_init(obj);
+</script>
+
+</body>
+</html>

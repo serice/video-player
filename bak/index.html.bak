@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Bubblecon LX Player</title>
+    <link rel="shortcut icon" href="image/favicon.ico" type="image/x-icon">
+    <!-- style -->
+    <link href="css/lx-player-ebs.css" rel="stylesheet" type="text/css">
+</head>
+<body>
+<div class="container">
+    <video id="lx-player" class="video-js bubble"
+           controls
+           preload="auto"
+           playsinline
+           data-setup='{}'>
+        <!--source src="http://occlip.ebsoc.co.kr/edrb/contents/vod/clip/web/201109/VOD_20110923_00017_ORG.mp4"-->
+        <!-- 동영상 자막 지원 -->
+        <track kind="captions" src="" srclang="en" label="English" default>
+        <p class="vjs-no-js">영상 로드중 문제가 발생하였습니다. 영상을 시청하시려면 자바스크립트를 활성화해주세요. </p>
+        <div class="tui"></div>
+
+    </video>
+</div>
+<script src="js/lx-player-ebs.js"></script>
+<script src="js/axios.min.js"></script>
+<script src="js/crypto-js.min.js"></script>
+<script>
+
+
+    //const lxPlayer = document.getElementById('lx-player');
+
+    function getCookie(cookieName){
+        var cookieValue=null;
+        if(document.cookie){
+    	  var array=document.cookie.split((escape(cookieName)+'='));
+    	  if(array.length >= 2){
+    	    var arraySub=array[1].split(';');
+    	    cookieValue=unescape(arraySub[0]);
+    	  }
+        }
+        return cookieValue;
+    }
+
+    function makeRate() {
+        const lxPlayer = window.videojs('lx-player');
+        const currentTime = lxPlayer.currentTime();
+        const duration = lxPlayer.duration();
+        let rate = Number.parseInt(( currentTime / duration ) * 100);
+	    if(rate > 66) {
+	        rate = 100;
+        }
+        rate = (rate > 100) ? 100 : rate;
+        return rate;
+    }
+
+    function calcStartAt(rate, duration) {
+        return Number.parseInt(rate * duration / 100, 10);
+    }
+
+    const encrypt = function (memberSeq, lctreLrnSqno, progressRate) {
+        // var data = `${memberSeq}|${lctreLrnSqno}|${progressRate}`;
+        var data = memberSeq + '|' + lctreLrnSqno + '|' + progressRate; 
+        var key  = CryptoJS.enc.Latin1.parse('l40jsfljasln32uf');
+        var iv   = CryptoJS.enc.Latin1.parse('asjfknal3bafjl23');
+
+        var encrypted = CryptoJS.AES.encrypt(
+          data,
+          key,
+          {iv:iv,mode:CryptoJS.mode.CBC,padding:CryptoJS.pad.ZeroPadding
+        });
+        //console.log('encrypted: ' + encrypted) ;
+        var decrypted = CryptoJS.AES.decrypt(encrypted,key,{iv:iv,padding:CryptoJS.pad.ZeroPadding});
+        //console.log('decrypted: '+decrypted.toString(CryptoJS.enc.Utf8));
+
+        return encrypted.toString();
+        // return decrypted;
+    }
+
+    const access = getCookie('access');
+    const memberSeq = getCookie('memberSeq');
+    const host = getCookie('host');
+    const lctreLrnSqno = getParam('lctreLrnSqno');
+    const userId = getParam('userId') || 'unknown';
+    // const vod_url = ( access && memberSeq && lctreLrnSqno && host ) ? getParam('content-url') : null;
+    // const vod_url = ( access && memberSeq && host ) ? getParam('content-url') : null;
+    const vod_url = getParam('content-url');
+    const running_time = getParam('running-time');
+    const start_at = calcStartAt(Number(getParam('progress-rate') || 0), Number(running_time));
+    const isPreview = getParam('is-preview');
+    const title = getParam('title') || 'unknown';
+
+    let API_SERVER_COMMON_DOMAIN = '';
+
+    if( window.document.domain.indexOf('stg') >= 0 ) {
+    //   API_SERVER_COMMON_DOMAIN = `http://${host}.stg.ebsoc.co.kr/`;
+      API_SERVER_COMMON_DOMAIN = 'http://' + host + '.stg.ebsoc.co.kr/';
+    } else {
+    //   API_SERVER_COMMON_DOMAIN = `https://${host}.ebsoc.co.kr/`;
+      API_SERVER_COMMON_DOMAIN = 'https://' + host + '.ebsoc.co.kr/';
+    }
+
+    function callApi(rate) {
+      if( !isPreview && lctreLrnSqno ) {
+        encriptedProgressRate = encrypt(memberSeq, lctreLrnSqno, rate);
+        //  const url = API_SERVER_COMMON_DOMAIN + `lecture/api/v1/student/learning/${lctreLrnSqno}/progress`;
+        const url = API_SERVER_COMMON_DOMAIN + 'lecture/api/v1/student/learning/' + lctreLrnSqno + '/progress';
+
+         // 필요한 header 세팅
+         // args.Authorization = store().state.token;
+
+         let axiosConfig = {
+             headers: {
+               'Content-Type': 'application/json;charset=UTF-8',
+               "Access-Control-Allow-Origin": "*",
+             },
+             proxyHeaders: false,
+             credentials: false
+         };
+
+         let authToken = {"X-AUTH-TOKEN" : access};
+
+         axiosConfig.headers = {...axiosConfig.headers, ...authToken};
+         axios.post(url, { encriptedProgressRate }, axiosConfig).catch(e => {
+             console.log(e);
+           });
+      }
+    }
+
+    // 학습 완료 call_back function
+    var complete_callback = function(){
+        const lxPlayer = window.videojs('lx-player');
+        // 최종 학습 현재 시간
+        // var current_time = lxPlayer.currentTime();
+        callApi(100);
+        //console.log('iframe1 학습 완료 콜백 함수');
+    }
+
+    // 주기적 발생 call_back function
+    var interval_callback = function(a){
+        const lxPlayer = window.videojs('lx-player');
+//        var current_time = lxPlayer.currentTime();
+//        var duration = lxPlayer.duration();
+        const rate = makeRate();
+        callApi(rate);
+        console.log('iframe1 콘탠츠 연속성 콜백 함수', rate);
+    }
+
+    var pause_callback = function(a){
+        // 동영상 전체 시간
+        // var duration = lxPlayer.duration();
+        // 현재 플레이 시간 추출 함수
+        // var current_time = lxPlayer.currentTime();
+
+        // 수강 시간 구하는 예제
+        // DB에 저장된 최종 학습 시간 - current_time = 수강시간
+        const lxPlayer = window.videojs('lx-player');
+//        var current_time = lxPlayer.currentTime();
+//        var duration = lxPlayer.duration();
+        const rate = makeRate();
+        callApi(rate);
+        console.log('iframe1 정지 콜백 함수');
+    }
+
+    var book_marked_callback = function (marker_list){
+        console.log('1frame1 : '+marker_list);
+    }
+
+    var obj =
+        {
+            // 필수 파라미터
+            // xapi 송출 url
+            //lrsUrl: 'https://lds.ebsoc.co.kr/xAPI/',
+
+            // api에 수집되는 email 정보
+            email: userId + '@ebsoc.ck.kr',
+
+            // 로그인 user id
+            name: userId,
+
+            // 콘텐츠 출처 url
+            baseurl: vod_url,
+
+            // 동영상 콘텐츠 제목
+            content_name: title,
+
+            // 동영상 콘텐츠 설명
+            description: '',
+
+            // 동영상 콘텐츠 url
+            //url: 'http://clips.vorwaerts-gmbh.de/VfE_html5.mp4',
+            url: vod_url,
+
+            // 선택 파라미터 - 아래의 옵션은 입력하지 않는다면, 노출되지 않는 옵션
+            // 최초 동영상 콘텐츠 시작 시간. 초단위
+            time: start_at,
+
+            // 워터마크 이미지 경로 - 사용하지 않겠다면 삭제
+            watermark: '',
+
+            // 앞으로 감기 사용 여부
+            forward_btn: false,
+
+            // 뒤 감기 사용 여부
+            rewind_btn: true,
+
+            // 반복 재생 사용 여부
+            loop_btn: false,
+
+            // 컨트롤바 제어 가능 여부 - 만약 컨트롤바 클릭 비활성화시, 북마크도 제외해야함
+            control_bar: false,
+
+            // 재생 속도 목록,  따로 설정하지 않을 시에는 기본값 적용 [0.5, 0.75, 1, 1.25, 1.5]
+            playback_rates:  [0.5, 0.75, 1, 1.25, 1.5],
+
+            // 서버에 저장된 bookmark list를 array로 구현하여 삽입해주어야 함
+            bookmarks: [],
+            index_array : [],                                  // 서버에 저장된 index list를 array로 구현하여 삽입해함 주아야
+            interval_sec : 30,                                 // 콘텐츠 연속성 반복 주기 (초단위)
+            interval_callback : interval_callback,             // 콘텐츠 연속성 콜백 함수
+            complete_callback : complete_callback,             // 학습 완료 콜백 함수
+            pause_callback : pause_callback,                   // 학습 중지시 발생되는 함수
+            book_marked_callback : book_marked_callback        // 북마크 리스트 반환 콜백 함수
+        };
+
+        // url 에서 parameter 추출
+        function getParam(sname) {
+            var params = location.search.substr(location.search.indexOf("?") + 1);
+            var sval = "";
+
+            params = params.split("&");
+
+            for (var i = 0; i < params.length; i++) {
+                temp = params[i].split("=");
+                if ([temp[0]] == sname) { sval = temp[1]; }
+            }
+            if( sval ) {
+                return decodeURIComponent(sval);
+            } else {
+                return sval;
+            }
+        }
+    // player init
+    player_init(obj);
+</script>
+
+</body>
+</html>
